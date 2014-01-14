@@ -7,6 +7,9 @@ namespace CudaSharpTest
     {
         static void Main()
         {
+            Console.WriteLine("Unsupported instructions:");
+            foreach (var opCode in CudaSharp.CudaSharp.UnsupportedInstructions)
+                Console.WriteLine(opCode);
             var ptx = CudaSharp.CudaSharp.Translate<int[]>(kernel);
             Test(ptx);
             Console.ReadKey(true);
