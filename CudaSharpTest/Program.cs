@@ -5,7 +5,7 @@ namespace CudaSharpTest
 {
     class Program
     {
-        static void Main(string[] args)
+        static void Main()
         {
             var ptx = CudaSharp.CudaSharp.Translate<int[]>(kernel);
             Test(ptx);
@@ -15,7 +15,9 @@ namespace CudaSharpTest
         // ReSharper disable once InconsistentNaming
         static void kernel(int[] arr)
         {
-            arr[0] = arr[0] + 3;
+            var val = arr[0];
+            if (val != 0)
+                arr[0] = val + 3;
         }
 
         static void Test(string ptxFile)

@@ -22,7 +22,9 @@ namespace CudaSharp
             {
                 var instructionStart = stream.BaseStream.Position;
                 var byteOpcode = stream.ReadByte();
-                var shortOpcode = byteOpcode == 0xfe ? BitConverter.ToInt16(new[] { byteOpcode, stream.ReadByte() }, 0) : byteOpcode;
+                var shortOpcode = byteOpcode == 0xfe
+                    ? BitConverter.ToInt16(BitConverter.IsLittleEndian ? new[] { stream.ReadByte(), byteOpcode } : new[] { byteOpcode, stream.ReadByte() }, 0)
+                    : byteOpcode;
                 var opcode = OpcodeLookupTable[shortOpcode];
                 object parameter;
                 switch (opcode.OperandType)
@@ -112,6 +114,11 @@ namespace CudaSharp
         public object Parameter
         {
             get { return _parameter; }
+        }
+
+        public override string ToString()
+        {
+            return string.Format("{0}: {1} - {2}", _instructionStart, _opcode, _parameter);
         }
     }
 }
