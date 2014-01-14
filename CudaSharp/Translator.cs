@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data.Odbc;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -9,6 +10,69 @@ using Type = LLVM.Type;
 
 namespace CudaSharp
 {
+    public static class Gpu
+    {
+        [AttributeUsage(AttributeTargets.Method)]
+        public class BuiltinAttribute : Attribute
+        {
+            private readonly string _intrinsic;
+
+            public BuiltinAttribute(string intrinsic)
+            {
+                _intrinsic = intrinsic;
+            }
+
+            public string Intrinsic
+            {
+                get { return _intrinsic; }
+            }
+        }
+
+        private static Exception Exception { get { return new Exception("Cannot use methods from the Gpu class on the CPU"); } }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.tid.x")]
+        public static int ThreadX() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.tid.y")]
+        public static int ThreadY() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.tid.z")]
+        public static int ThreadZ() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.ctaid.x")]
+        public static int BlockX() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.ctaid.y")]
+        public static int BlockY() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.ctaid.z")]
+        public static int BlockZ() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.ntid.x")]
+        public static int ThreadDimX() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.ntid.y")]
+        public static int ThreadDimY() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.ntid.z")]
+        public static int ThreadDimZ() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.nctaid.x")]
+        public static int BlockDimX() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.nctaid.y")]
+        public static int BlockDimY() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.nctaid.z")]
+        public static int BlockDimZ() { throw Exception; }
+
+        [Builtin("llvm.nvvm.read.ptx.sreg.warpsize")]
+        public static int WarpSize() { throw Exception; }
+
+        [Builtin("llvm.nvvm.barrier0")]
+        public static void Barrier() { throw Exception; }
+    }
+
     static class Translator
     {
         public static Module Translate(Context context, MethodInfo method)
@@ -32,7 +96,31 @@ namespace CudaSharp
 
         public static void Translate(Context context, Module module, MethodInfo method)
         {
-            var funcType = new FunctionType(Type.GetVoid(context), AnalyzeArguments(context, method.GetParameters()));
+            var function = EmitFunction(context, module, method);
+
+            var metadataArgs = new[]
+            {
+                function, PInvoke.LLVMMDStringInContext(context, method.Name),
+                IntegerType.GetInt32(context).Constant(1, true)
+            };
+            var metadata = PInvoke.LLVMMDNodeInContext(context, metadataArgs);
+            PInvoke.LLVMAddNamedMetadataOperand(module, "nvvm.annotations", metadata);
+        }
+
+        private static Function EmitFunction(Context context, Module module, MethodInfo method)
+        {
+            var funcType = new FunctionType(ConvertType(context, method.ReturnType), AnalyzeArguments(context, method.GetParameters()));
+
+            var intrinsic = method.GetCustomAttribute<Gpu.BuiltinAttribute>();
+            if (intrinsic != null)
+            {
+                var name = intrinsic.Intrinsic;
+                var preExisting = module.GetFunction(name);
+                if (preExisting != null)
+                    return preExisting;
+                return module.CreateFunction(name, funcType);
+            }
+
             var function = module.CreateFunction(method.Name, funcType);
 
             var block = new Block("entry", context, function);
@@ -42,7 +130,7 @@ namespace CudaSharp
             FindBranchTargets(opcodes, context, function);
 
             var body = method.GetMethodBody();
-            var efo = new EmitFuncObj(context, function, writer, null, new Stack<Value>(),
+            var efo = new EmitFuncObj(context, module, function, writer, null, new Stack<Value>(),
                 body == null ? null : new Value[body.LocalVariables.Count], new Value[method.GetParameters().Length]);
 
             foreach (var opcode in opcodes)
@@ -54,13 +142,7 @@ namespace CudaSharp
                 func(efo);
             }
 
-            var metadataArgs = new[]
-            {
-                function, PInvoke.LLVMMDStringInContext(context, method.Name),
-                IntegerType.GetInt32(context).Constant(1, true)
-            };
-            var metadata = PInvoke.LLVMMDNodeInContext(context, metadataArgs);
-            PInvoke.LLVMAddNamedMetadataOperand(module, "nvvm.annotations", metadata);
+            return function;
         }
 
         private static Type[] AnalyzeArguments(Context context, IEnumerable<ParameterInfo> parameters)
@@ -70,6 +152,8 @@ namespace CudaSharp
 
         private static Type ConvertType(Context context, System.Type type)
         {
+            if (type == typeof(void))
+                return Type.GetVoid(context);
             if (type == typeof(bool))
                 return IntegerType.Get(context, 1);
             if (type == typeof(byte))
@@ -95,14 +179,16 @@ namespace CudaSharp
             public InstructionBuilder Builder { get; set; }
             public object Argument { get; set; }
             public Context Context { get; private set; }
+            public Module Module { get; set; }
             public Function Function { get; private set; }
             public Stack<Value> Stack { get; private set; }
             public Value[] Locals { get; private set; }
             public Value[] Parameters { get; private set; }
 
-            public EmitFuncObj(Context context, Function function, InstructionBuilder instructionBuilder, object argument, Stack<Value> stack, Value[] locals, Value[] parameters)
+            public EmitFuncObj(Context context, Module module, Function function, InstructionBuilder instructionBuilder, object argument, Stack<Value> stack, Value[] locals, Value[] parameters)
             {
                 Context = context;
+                Module = module;
                 Function = function;
                 Builder = instructionBuilder;
                 Argument = argument;
@@ -153,6 +239,8 @@ namespace CudaSharp
         private static readonly Dictionary<OpCode, EmitFunc> EmitFunctions = new Dictionary<OpCode, EmitFunc>
         {
             {OpCodes.Nop, Nop},
+            {OpCodes.Pop, _ => _.Stack.Pop()},
+            {OpCodes.Dup, _ => _.Stack.Push(_.Stack.Peek())},
             {OpCodes.Ret, _ => { if (_.Stack.Count == 0) _.Builder.Return(); else _.Builder.Return(_.Stack.Pop()); _.Builder = null; }},
             {OpCodes.Ldc_I4, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(Convert.ToUInt64(_.Argument), true))},
             {OpCodes.Ldc_I4_S, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(Convert.ToUInt64(_.Argument), true))},
@@ -166,6 +254,7 @@ namespace CudaSharp
             {OpCodes.Ldc_I4_7, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(7, true))},
             {OpCodes.Ldc_I4_8, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(8, true))},
             {OpCodes.Ldc_I4_M1, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(ulong.MaxValue, true))},
+            {OpCodes.Ldc_I8, _ => _.Stack.Push(IntegerType.Get(_.Context, 64).Constant(ulong.MaxValue, true))},
             {OpCodes.Stelem, StElem},
             {OpCodes.Stelem_I, StElem},
             {OpCodes.Stelem_I1, StElem},
@@ -187,6 +276,37 @@ namespace CudaSharp
             {OpCodes.Ldelem_U1, LdElem},
             {OpCodes.Ldelem_U2, LdElem},
             {OpCodes.Ldelem_U4, LdElem},
+            {OpCodes.Ldind_I, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_I1, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_I2, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_I4, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_I8, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_R4, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_R8, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_U1, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_U2, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_U4, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Ldind_Ref, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Stind_I, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
+            {OpCodes.Stind_I1, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
+            {OpCodes.Stind_I2, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
+            {OpCodes.Stind_I4, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
+            {OpCodes.Stind_I8, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
+            {OpCodes.Stind_R4, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
+            {OpCodes.Stind_R8, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
+            {OpCodes.Stind_Ref, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
+            {OpCodes.Conv_I1, _ => ConvertNum(_, IntegerType.Get(_.Context, 8 ), true)},
+            {OpCodes.Conv_I2, _ => ConvertNum(_, IntegerType.Get(_.Context, 16), true)},
+            {OpCodes.Conv_I4, _ => ConvertNum(_, IntegerType.Get(_.Context, 32), true)},
+            {OpCodes.Conv_I8, _ => ConvertNum(_, IntegerType.Get(_.Context, 64), true)},
+            {OpCodes.Conv_U1, _ => ConvertNum(_, IntegerType.Get(_.Context, 8 ), false)},
+            {OpCodes.Conv_U2, _ => ConvertNum(_, IntegerType.Get(_.Context, 16), false)},
+            {OpCodes.Conv_U4, _ => ConvertNum(_, IntegerType.Get(_.Context, 32), false)},
+            {OpCodes.Conv_U8, _ => ConvertNum(_, IntegerType.Get(_.Context, 64), false)},
+            {OpCodes.Conv_R4, _ => ConvertNum(_, FloatType.Get(_.Context, 32), true)},
+            {OpCodes.Conv_R8, _ => ConvertNum(_, FloatType.Get(_.Context, 64), true)},
+            {OpCodes.Neg, _ => _.Stack.Push(_.Builder.Negate(_.Stack.Pop()))},
+            {OpCodes.Not, _ => _.Stack.Push(_.Builder.Not(_.Stack.Pop()))},
             {OpCodes.Add, _ => _.Stack.Push(_.Builder.Add(_.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Sub, _ => _.Stack.Push(_.Builder.Subtract(_.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Mul, _ => _.Stack.Push(_.Builder.Multiply(_.Stack.Pop(), _.Stack.Pop()))},
@@ -194,7 +314,13 @@ namespace CudaSharp
             {OpCodes.Div_Un, _ => _.Stack.Push(_.Builder.Divide(false, _.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Rem, _ => _.Stack.Push(_.Builder.Reminder(true, _.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Rem_Un, _ => _.Stack.Push(_.Builder.Reminder(false, _.Stack.Pop(), _.Stack.Pop()))},
-            {OpCodes.Ceq, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.Equal, PopNoBool(_), PopNoBool(_)))},
+            {OpCodes.And, _ => _.Stack.Push(_.Builder.And(_.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Or, _ => _.Stack.Push(_.Builder.Or(_.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Xor, _ => _.Stack.Push(_.Builder.Xor(_.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Shl, _ => _.Stack.Push(_.Builder.ShiftLeft(_.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Shr, _ => _.Stack.Push(_.Builder.ShiftRight(true, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Shr_Un, _ => _.Stack.Push(_.Builder.ShiftRight(false, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Ceq, Ceq},
             {OpCodes.Cgt, Cgt},
             {OpCodes.Cgt_Un, CgtUn},
             {OpCodes.Clt, Clt},
@@ -225,23 +351,43 @@ namespace CudaSharp
             {OpCodes.Brtrue_S, _ => BrCond(_, true)},
             {OpCodes.Brfalse, _ => BrCond(_, false)},
             {OpCodes.Brfalse_S, _ => BrCond(_, false)},
-            {OpCodes.Ble, _ => { Cle(_); BrCond(_, true); }},
-            {OpCodes.Ble_S, _ => { Cle(_); BrCond(_, true); }},
-            {OpCodes.Ble_Un, _ => { CleUn(_); BrCond(_, true); }},
-            {OpCodes.Ble_Un_S, _ => { CleUn(_); BrCond(_, true); }},
-            {OpCodes.Blt, _ => { Clt(_); BrCond(_, true); }},
-            {OpCodes.Blt_S, _ => { Clt(_); BrCond(_, true); }},
-            {OpCodes.Blt_Un, _ => { CltUn(_); BrCond(_, true); }},
-            {OpCodes.Blt_Un_S, _ => { CltUn(_); BrCond(_, true); }},
-            {OpCodes.Bge, _ => { Cge(_); BrCond(_, true); }},
-            {OpCodes.Bge_S, _ => { Cge(_); BrCond(_, true); }},
-            {OpCodes.Bge_Un, _ => { CgeUn(_); BrCond(_, true); }},
-            {OpCodes.Bge_Un_S, _ => { CgeUn(_); BrCond(_, true); }},
-            {OpCodes.Bgt, _ => { Cgt(_); BrCond(_, true); }},
-            {OpCodes.Bgt_S, _ => { Cgt(_); BrCond(_, true); }},
-            {OpCodes.Bgt_Un, _ => { CgtUn(_); BrCond(_, true); }},
-            {OpCodes.Bgt_Un_S, _ => { CgtUn(_); BrCond(_, true); }},
+            {OpCodes.Beq, _ => {Ceq(_);BrCond(_, true);}},
+            {OpCodes.Beq_S, _ => {Ceq(_);BrCond(_, true);}},
+            {OpCodes.Bne_Un, _ => {Ceq(_);BrCond(_, false);}},
+            {OpCodes.Bne_Un_S, _ => {Ceq(_);BrCond(_, false);}},
+            {OpCodes.Ble, _ => {Cle(_);BrCond(_, true);}},
+            {OpCodes.Ble_S, _ => {Cle(_);BrCond(_, true);}},
+            {OpCodes.Ble_Un, _ => {CleUn(_);BrCond(_, true);}},
+            {OpCodes.Ble_Un_S, _ => {CleUn(_);BrCond(_, true);}},
+            {OpCodes.Blt, _ => {Clt(_);BrCond(_, true);}},
+            {OpCodes.Blt_S, _ => {Clt(_);BrCond(_, true);}},
+            {OpCodes.Blt_Un, _ => {CltUn(_);BrCond(_, true);}},
+            {OpCodes.Blt_Un_S, _ => {CltUn(_);BrCond(_, true);}},
+            {OpCodes.Bge, _ => {Cge(_);BrCond(_, true);}},
+            {OpCodes.Bge_S, _ => {Cge(_);BrCond(_, true);}},
+            {OpCodes.Bge_Un, _ => {CgeUn(_);BrCond(_, true);}},
+            {OpCodes.Bge_Un_S, _ => {CgeUn(_);BrCond(_, true);}},
+            {OpCodes.Bgt, _ => {Cgt(_);BrCond(_, true);}},
+            {OpCodes.Bgt_S, _ => {Cgt(_);BrCond(_, true);}},
+            {OpCodes.Bgt_Un, _ => {CgtUn(_);BrCond(_, true);}},
+            {OpCodes.Bgt_Un_S, _ => {CgtUn(_);BrCond(_, true);}},
+            {OpCodes.Tailcall, Call},
+            {OpCodes.Call, Call},
         };
+
+        private static void Call(EmitFuncObj _)
+        {
+            var method = (MethodInfo)_.Argument;
+            var args = method.GetParameters().Select(x => _.Stack.Pop()).Reverse().ToArray();
+            var result = _.Builder.Call(EmitFunction(_.Context, _.Module, method), args);
+            if (result.Type.StructuralEquals(Type.GetVoid(_.Context)) == false)
+                _.Stack.Push(result);
+        }
+
+        private static void Ceq(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.Equal, PopNoBool(_), PopNoBool(_)));
+        }
 
         private static void Cgt(EmitFuncObj _)
         {
@@ -364,6 +510,16 @@ namespace CudaSharp
             var idx = _.Builder.Element(array, new[] { index });
             var load = _.Builder.Load(idx);
             _.Stack.Push(load);
+        }
+
+        private static void ConvertNum(EmitFuncObj _, Type target, bool integerSignedness)
+        {
+            //var value = _.Stack.Pop();
+            //var valueType = value.Type;
+            //if (valueType is IntegerType && target is FloatType)
+            //{
+            //    value = _.Builder.
+            //}
         }
     }
 }

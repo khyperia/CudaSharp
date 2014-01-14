@@ -1,4 +1,5 @@
 ﻿using System;
+using CudaSharp;
 using ManagedCuda;
 
 namespace CudaSharpTest
@@ -7,36 +8,42 @@ namespace CudaSharpTest
     {
         static void Main()
         {
-            Console.WriteLine("Unsupported instructions:");
-            foreach (var opCode in CudaSharp.CudaSharp.UnsupportedInstructions)
-                Console.WriteLine(opCode);
             var ptx = CudaSharp.CudaSharp.Translate<int[]>(kernel);
             Test(ptx);
             Console.ReadKey(true);
         }
 
+        static void store(int[] arr, int value)
+        {
+            arr[Gpu.ThreadX() + Gpu.BlockX() * Gpu.ThreadDimX()] = value;
+        }
+
         // ReSharper disable once InconsistentNaming
         static void kernel(int[] arr)
         {
-            var val = arr[0];
+            var tid = Gpu.ThreadX() + Gpu.BlockX() * Gpu.ThreadDimX();
+            var val = arr[tid];
             if (val != 0)
-                arr[0] = val + 3;
+                store(arr, val + 3);
         }
 
         static void Test(string ptxFile)
         {
+            const int size = 16;
             var context = new CudaContext();
             var kernel = context.LoadKernelPTX(ptxFile, "kernel");
-            var memory = context.AllocateMemory(4);
+            var memory = context.AllocateMemory(4 * size);
             var gpuMemory = new CudaDeviceVariable<int>(memory);
-            var cpuMemory = new int[1];
-            cpuMemory[0] = 2;
+            var cpuMemory = new int[size];
+            for (var i = 0; i < size; i++)
+                cpuMemory[i] = i - 2;
             gpuMemory.CopyToDevice(cpuMemory);
-            kernel.BlockDimensions = 1;
-            kernel.GridDimensions = 1;
+            kernel.BlockDimensions = 4;
+            kernel.GridDimensions = 4;
             kernel.Run(memory);
             gpuMemory.CopyToHost(cpuMemory);
-            Console.WriteLine(cpuMemory[0]);
+            for (var i = 0; i < size; i++)
+                Console.WriteLine("{0} = {1}", i, cpuMemory[i]);
         }
     }
 }
