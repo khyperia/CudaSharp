@@ -15,8 +15,16 @@ namespace CudaSharp
         {
             var module = new Module("Module", context);
 
-            PInvoke.LLVMSetTarget(module, "nvptx64-nvidia-cuda");
-            PInvoke.LLVMSetDataLayout(module, "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
+            if (Environment.Is64BitOperatingSystem)
+            {
+                PInvoke.LLVMSetTarget(module, "nvptx64-nvidia-cuda");
+                PInvoke.LLVMSetDataLayout(module, "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
+            }
+            else
+            {
+                PInvoke.LLVMSetTarget(module, "nvptx-nvidia-cuda");
+                PInvoke.LLVMSetDataLayout(module, "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
+            }
 
             Translate(context, module, method);
             return module;
@@ -30,15 +38,20 @@ namespace CudaSharp
             var block = new Block("entry", context, function);
             var writer = new InstructionBuilder(context, block);
 
-            var stack = new Stack<Value>();
+            var opcodes = method.Decompile().ToList();
+            FindBranchTargets(opcodes, context, function);
 
-            foreach (var opcode in method.Decompile())
+            var body = method.GetMethodBody();
+            var efo = new EmitFuncObj(context, function, writer, null, new Stack<Value>(),
+                body == null ? null : new Value[body.LocalVariables.Count], new Value[method.GetParameters().Length]);
+
+            foreach (var opcode in opcodes)
             {
                 if (EmitFunctions.ContainsKey(opcode.Opcode) == false)
                     throw new Exception("Unsupported CIL instruction " + opcode.Opcode);
                 var func = EmitFunctions[opcode.Opcode];
-                var arg = new EmitFuncStruct(context, function, writer, opcode.Parameter, stack);
-                func(arg);
+                efo.Argument = opcode.Parameter;
+                func(efo);
             }
 
             var metadataArgs = new[]
@@ -77,61 +90,70 @@ namespace CudaSharp
             throw new Exception("Type cannot be translated to CUDA: " + type.FullName);
         }
 
-        struct EmitFuncStruct
+        class EmitFuncObj
         {
-            private readonly Context _context;
-            private readonly Function _function;
-            private readonly InstructionBuilder _instructionBuilder;
-            private readonly object _argument;
-            private readonly Stack<Value> _stack;
+            public InstructionBuilder Builder { get; set; }
+            public object Argument { get; set; }
+            public Context Context { get; private set; }
+            public Function Function { get; private set; }
+            public Stack<Value> Stack { get; private set; }
+            public Value[] Locals { get; private set; }
+            public Value[] Parameters { get; private set; }
 
-            public EmitFuncStruct(Context context, Function function, InstructionBuilder instructionBuilder, object argument, Stack<Value> stack)
+            public EmitFuncObj(Context context, Function function, InstructionBuilder instructionBuilder, object argument, Stack<Value> stack, Value[] locals, Value[] parameters)
             {
-                _context = context;
-                _function = function;
-                _instructionBuilder = instructionBuilder;
-                _argument = argument;
-                _stack = stack;
-            }
-
-            public Context Context
-            {
-                get { return _context; }
-            }
-
-            public Function Function
-            {
-                get { return _function; }
-            }
-
-            public InstructionBuilder Builder
-            {
-                get { return _instructionBuilder; }
-            }
-
-            public object Argument
-            {
-                get { return _argument; }
-            }
-
-            public Stack<Value> Stack
-            {
-                get { return _stack; }
+                Context = context;
+                Function = function;
+                Builder = instructionBuilder;
+                Argument = argument;
+                Stack = stack;
+                Locals = locals;
+                Parameters = parameters;
             }
         }
 
-        private delegate void EmitFunc(EmitFuncStruct arg);
+        private static void FindBranchTargets(IList<OpCodeInstruction> opCodes, Context context, Function function)
+        {
+            for (var i = 0; i < opCodes.Count; i++)
+            {
+                var op = opCodes[i];
+                var opcode = op.Opcode;
+                switch (opcode.FlowControl)
+                {
+                    case FlowControl.Branch:
+                    case FlowControl.Cond_Branch:
+                        break;
+                    default:
+                        continue;
+                }
+
+                var target = Convert.ToInt32(op.Parameter);
+                target += (int)opCodes[i + 1].InstructionStart;
+
+                var insert = 0;
+                while (opCodes[insert].InstructionStart != target)
+                    insert++;
+
+                var contBlock = new Block("", context, function);
+                Block block;
+                if (opCodes[insert].Opcode == OpCodes.Nop && opCodes[insert].Parameter != null)
+                    block = (Block)opCodes[insert].Parameter;
+                else
+                {
+                    opCodes.Insert(insert, new OpCodeInstruction(target, OpCodes.Nop, block = new Block("", context, function)));
+                    if (insert < i)
+                        i++;
+                }
+                opCodes[i] = new OpCodeInstruction(op.InstructionStart, op.Opcode, Tuple.Create(contBlock, block));
+            }
+        }
+
+        private delegate void EmitFunc(EmitFuncObj arg);
 
         private static readonly Dictionary<OpCode, EmitFunc> EmitFunctions = new Dictionary<OpCode, EmitFunc>
         {
-            {OpCodes.Nop, _ => { }},
-            {OpCodes.Ret, _ => { if (_.Stack.Count == 0) _.Builder.Return(); else _.Builder.Return(_.Stack.Pop());}},
-            {OpCodes.Ldarg, _ => _.Stack.Push(_.Function[Convert.ToInt32(_.Argument)])},
-            {OpCodes.Ldarg_S, _ => _.Stack.Push(_.Function[Convert.ToInt32(_.Argument)])},
-            {OpCodes.Ldarg_0, _ => _.Stack.Push(_.Function[0])},
-            {OpCodes.Ldarg_1, _ => _.Stack.Push(_.Function[1])},
-            {OpCodes.Ldarg_2, _ => _.Stack.Push(_.Function[2])},
-            {OpCodes.Ldarg_3, _ => _.Stack.Push(_.Function[3])},
+            {OpCodes.Nop, Nop},
+            {OpCodes.Ret, _ => { if (_.Stack.Count == 0) _.Builder.Return(); else _.Builder.Return(_.Stack.Pop()); _.Builder = null; }},
             {OpCodes.Ldc_I4, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(Convert.ToUInt64(_.Argument), true))},
             {OpCodes.Ldc_I4_S, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(Convert.ToUInt64(_.Argument), true))},
             {OpCodes.Ldc_I4_0, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(0, true))},
@@ -169,10 +191,102 @@ namespace CudaSharp
             {OpCodes.Sub, _ => _.Stack.Push(_.Builder.Subtract(_.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Mul, _ => _.Stack.Push(_.Builder.Multiply(_.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Div, _ => _.Stack.Push(_.Builder.Divide(true, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Div_Un, _ => _.Stack.Push(_.Builder.Divide(false, _.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Rem, _ => _.Stack.Push(_.Builder.Reminder(true, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Rem_Un, _ => _.Stack.Push(_.Builder.Reminder(false, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Ceq, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.Equal, PopNoBool(_), PopNoBool(_)))},
+            {OpCodes.Cgt, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.SignedGreater, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Cgt_Un, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.UnsignedGreater, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Clt, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.SignedLess, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Clt_Un, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.UnsignedLess, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Ldloc, _ => LdVar(_, _.Locals, Convert.ToInt32(_.Argument), false)},
+            {OpCodes.Ldloc_S, _ => LdVar(_, _.Locals, Convert.ToInt32(_.Argument), false)},
+            {OpCodes.Ldloc_0, _ => LdVar(_, _.Locals, 0, false)},
+            {OpCodes.Ldloc_1, _ => LdVar(_, _.Locals, 1, false)},
+            {OpCodes.Ldloc_2, _ => LdVar(_, _.Locals, 2, false)},
+            {OpCodes.Ldloc_3, _ => LdVar(_, _.Locals, 3, false)},
+            {OpCodes.Stloc, _ => StVar(_, _.Locals, Convert.ToInt32(_.Argument))},
+            {OpCodes.Stloc_S, _ => StVar(_, _.Locals, Convert.ToInt32(_.Argument))},
+            {OpCodes.Stloc_0, _ => StVar(_, _.Locals, 0)},
+            {OpCodes.Stloc_1, _ => StVar(_, _.Locals, 1)},
+            {OpCodes.Stloc_2, _ => StVar(_, _.Locals, 2)},
+            {OpCodes.Stloc_3, _ => StVar(_, _.Locals, 3)},
+            {OpCodes.Ldarg, _ => LdVar(_, _.Parameters, Convert.ToInt32(_.Argument), true)},
+            {OpCodes.Ldarg_S, _ => LdVar(_, _.Parameters, Convert.ToInt32(_.Argument), true)},
+            {OpCodes.Ldarg_0, _ => LdVar(_, _.Parameters, 0, true)},
+            {OpCodes.Ldarg_1, _ => LdVar(_, _.Parameters, 1, true)},
+            {OpCodes.Ldarg_2, _ => LdVar(_, _.Parameters, 2, true)},
+            {OpCodes.Ldarg_3, _ => LdVar(_, _.Parameters, 3, true)},
+            {OpCodes.Starg, _ => StVar(_, _.Parameters, Convert.ToInt32(_.Argument))},
+            {OpCodes.Starg_S, _ => StVar(_, _.Parameters, Convert.ToInt32(_.Argument))},
+            {OpCodes.Br, Br},
+            {OpCodes.Br_S, Br},
+            {OpCodes.Brtrue, _ => BrCond(_, true)},
+            {OpCodes.Brtrue_S, _ => BrCond(_, true)},
+            {OpCodes.Brfalse, _ => BrCond(_, false)},
+            {OpCodes.Brfalse_S, _ => BrCond(_, false)},
         };
 
-        private static void StElem(EmitFuncStruct _)
+        private static Value PopNoBool(EmitFuncObj _)
+        {
+            var popped = _.Stack.Pop();
+            if (popped.Type.StructuralEquals(IntegerType.Get(_.Context, 1)))
+                popped = _.Builder.ZeroExtend(popped, IntegerType.GetInt32(_.Context));
+            return popped;
+        }
+
+        private static void Nop(EmitFuncObj _)
+        {
+            var block = (Block)_.Argument;
+            if (block == null)
+                return;
+            if (_.Builder != null)
+                _.Builder.GoTo(block);
+            _.Builder = new InstructionBuilder(_.Context, block);
+        }
+
+        private static void Br(EmitFuncObj _)
+        {
+            _.Builder.GoTo((Block)_.Argument);
+            _.Builder = null;
+        }
+
+        private static void BrCond(EmitFuncObj _, bool isTrue)
+        {
+            var tuple = (Tuple<Block, Block>)_.Argument;
+            var cont = tuple.Item1;
+            var target = tuple.Item2;
+            _.Builder.If(_.Stack.Pop(), isTrue ? target : cont, isTrue ? cont : target);
+            _.Builder = new InstructionBuilder(_.Context, cont);
+        }
+
+        private static void LdVar(EmitFuncObj _, Value[] values, int index, bool isParameter)
+        {
+            if (values[index] == null)
+            {
+                if (!isParameter)
+                    throw new Exception("Uninitialized variable at index " + index);
+                var arg = _.Function[index];
+                values[index] = _.Builder.StackAlloc(_.Function[index].Type);
+                _.Builder.Store(arg, values[index]);
+                _.Stack.Push(arg);
+            }
+            else
+            {
+                var load = _.Builder.Load(values[index]);
+                _.Stack.Push(load);
+            }
+        }
+
+        private static void StVar(EmitFuncObj _, Value[] values, int index)
+        {
+            var pop = _.Stack.Pop();
+            if (values[index] == null)
+                values[index] = _.Builder.StackAlloc(pop.Type);
+            _.Builder.Store(pop, values[index]);
+        }
+
+        private static void StElem(EmitFuncObj _)
         {
             var value = _.Stack.Pop();
             var index = _.Stack.Pop();
@@ -181,7 +295,7 @@ namespace CudaSharp
             _.Builder.Store(value, idx);
         }
 
-        private static void LdElem(EmitFuncStruct _)
+        private static void LdElem(EmitFuncObj _)
         {
             var index = _.Stack.Pop();
             var array = _.Stack.Pop();
