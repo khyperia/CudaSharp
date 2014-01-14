@@ -195,10 +195,10 @@ namespace CudaSharp
             {OpCodes.Rem, _ => _.Stack.Push(_.Builder.Reminder(true, _.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Rem_Un, _ => _.Stack.Push(_.Builder.Reminder(false, _.Stack.Pop(), _.Stack.Pop()))},
             {OpCodes.Ceq, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.Equal, PopNoBool(_), PopNoBool(_)))},
-            {OpCodes.Cgt, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.SignedGreater, _.Stack.Pop(), _.Stack.Pop()))},
-            {OpCodes.Cgt_Un, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.UnsignedGreater, _.Stack.Pop(), _.Stack.Pop()))},
-            {OpCodes.Clt, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.SignedLess, _.Stack.Pop(), _.Stack.Pop()))},
-            {OpCodes.Clt_Un, _ => _.Stack.Push(_.Builder.Compare(IntegerComparison.UnsignedLess, _.Stack.Pop(), _.Stack.Pop()))},
+            {OpCodes.Cgt, Cgt},
+            {OpCodes.Cgt_Un, CgtUn},
+            {OpCodes.Clt, Clt},
+            {OpCodes.Clt_Un, CltUn},
             {OpCodes.Ldloc, _ => LdVar(_, _.Locals, Convert.ToInt32(_.Argument), false)},
             {OpCodes.Ldloc_S, _ => LdVar(_, _.Locals, Convert.ToInt32(_.Argument), false)},
             {OpCodes.Ldloc_0, _ => LdVar(_, _.Locals, 0, false)},
@@ -225,7 +225,69 @@ namespace CudaSharp
             {OpCodes.Brtrue_S, _ => BrCond(_, true)},
             {OpCodes.Brfalse, _ => BrCond(_, false)},
             {OpCodes.Brfalse_S, _ => BrCond(_, false)},
+            {OpCodes.Ble, _ => { Cle(_); BrCond(_, true); }},
+            {OpCodes.Ble_S, _ => { Cle(_); BrCond(_, true); }},
+            {OpCodes.Ble_Un, _ => { CleUn(_); BrCond(_, true); }},
+            {OpCodes.Ble_Un_S, _ => { CleUn(_); BrCond(_, true); }},
+            {OpCodes.Blt, _ => { Clt(_); BrCond(_, true); }},
+            {OpCodes.Blt_S, _ => { Clt(_); BrCond(_, true); }},
+            {OpCodes.Blt_Un, _ => { CltUn(_); BrCond(_, true); }},
+            {OpCodes.Blt_Un_S, _ => { CltUn(_); BrCond(_, true); }},
+            {OpCodes.Bge, _ => { Cge(_); BrCond(_, true); }},
+            {OpCodes.Bge_S, _ => { Cge(_); BrCond(_, true); }},
+            {OpCodes.Bge_Un, _ => { CgeUn(_); BrCond(_, true); }},
+            {OpCodes.Bge_Un_S, _ => { CgeUn(_); BrCond(_, true); }},
+            {OpCodes.Bgt, _ => { Cgt(_); BrCond(_, true); }},
+            {OpCodes.Bgt_S, _ => { Cgt(_); BrCond(_, true); }},
+            {OpCodes.Bgt_Un, _ => { CgtUn(_); BrCond(_, true); }},
+            {OpCodes.Bgt_Un_S, _ => { CgtUn(_); BrCond(_, true); }},
         };
+
+        private static void Cgt(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.SignedGreater, _.Stack.Pop(), _.Stack.Pop()));
+        }
+
+        private static void CgtUn(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.UnsignedGreater, _.Stack.Pop(), _.Stack.Pop()));
+        }
+
+        private static void Cge(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.SignedGreaterEqual, _.Stack.Pop(), _.Stack.Pop()));
+        }
+
+        private static void CgeUn(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.UnsignedGreaterEqual, _.Stack.Pop(), _.Stack.Pop()));
+        }
+
+        private static void Clt(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.SignedLess, _.Stack.Pop(), _.Stack.Pop()));
+        }
+
+        private static void CltUn(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.UnsignedLess, _.Stack.Pop(), _.Stack.Pop()));
+        }
+
+        private static void Cle(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.SignedLessEqual, _.Stack.Pop(), _.Stack.Pop()));
+        }
+
+        private static void CleUn(EmitFuncObj _)
+        {
+            _.Stack.Push(_.Builder.Compare(IntegerComparison.UnsignedLessEqual, _.Stack.Pop(), _.Stack.Pop()));
+        }
+
+        private static readonly OpCode[] UnsupportedInstructionsArr = typeof(OpCodes).GetFields().Select(f => (OpCode)f.GetValue(null)).Where(op => !EmitFunctions.ContainsKey(op)).ToArray();
+        public static OpCode[] UnsupportedInstructions
+        {
+            get { return UnsupportedInstructionsArr; }
+        }
 
         private static Value PopNoBool(EmitFuncObj _)
         {

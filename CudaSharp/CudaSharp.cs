@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Reflection;
+using System.Reflection.Emit;
 using LLVM;
 using LLVM.NativeLibrary;
 
@@ -11,6 +12,11 @@ namespace CudaSharp
         static CudaSharp()
         {
             LLVMDLL.Load();
+        }
+
+        public static OpCode[] UnsupportedInstructions
+        {
+            get { return Translator.UnsupportedInstructions; }
         }
 
         public static string Translate(Action method) { return Translate(method.Method); }
