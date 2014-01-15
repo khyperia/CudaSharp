@@ -4,7 +4,7 @@ using ManagedCuda;
 
 namespace CudaSharpTest
 {
-    class Program
+    static class Program
     {
         static void Main()
         {
@@ -27,7 +27,7 @@ namespace CudaSharpTest
                 store(arr, val + 3);
         }
 
-        static void Test(string ptxFile)
+        static void Test(byte[] ptxFile)
         {
             const int size = 16;
             var context = new CudaContext();
