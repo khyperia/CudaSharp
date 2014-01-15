@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Data.Odbc;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -75,7 +74,7 @@ namespace CudaSharp
 
     static class Translator
     {
-        public static Module Translate(Context context, MethodInfo method)
+        public static Module Translate(Context context, params MethodInfo[] methods)
         {
             var module = new Module("Module", context);
 
@@ -90,7 +89,8 @@ namespace CudaSharp
                 PInvoke.LLVMSetDataLayout(module, "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
             }
 
-            Translate(context, module, method);
+            foreach (var method in methods)
+                Translate(context, module, method);
             return module;
         }
 
