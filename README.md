@@ -9,7 +9,7 @@ C# is executed on the GPU like so:
 
 * Your C# compiler translates C# to .net CIL
 
-* Calling the CudaSharp.Translate method reads the CIL, translates to LLVM IR, and compilers to NVIDIA PTX
+* Calling the CudaSharp.Translate method reads the CIL, translates to LLVM IR, and compiles to NVIDIA PTX
 
 * Use your GPU library of choice (for example, ManagedCuda) to read in the PTX file and execute it on the GPU
 
