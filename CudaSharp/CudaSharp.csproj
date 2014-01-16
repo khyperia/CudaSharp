@@ -33,14 +33,11 @@
     <Reference Include="LLVM">
       <HintPath>..\packages\LLVM.0.1.0\lib\LLVM.dll</HintPath>
     </Reference>
-    <Reference Include="LLVM.NativeLibrary, Version=0.1.0.0, Culture=neutral, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\packages\LLVM.NativeLibrary.0.1.0.1\lib\LLVM.NativeLibrary.dll</HintPath>
-    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Extensions.cs" />
     <Compile Include="PInvoke.cs" />
     <Compile Include="CudaSharp.cs" />
     <Compile Include="Disasm.cs" />

@@ -90,26 +90,39 @@ namespace CudaSharp
             }
 
             foreach (var method in methods)
-                Translate(context, module, method);
+                Translate(module, method);
             return module;
         }
 
-        public static void Translate(Context context, Module module, MethodInfo method)
+        private static void Translate(Module module, MethodBase method)
         {
-            var function = EmitFunction(context, module, method);
+            var function = EmitFunction(module, method);
 
             var metadataArgs = new[]
             {
-                function, PInvoke.LLVMMDStringInContext(context, method.Name),
-                IntegerType.GetInt32(context).Constant(1, true)
+                function, PInvoke.LLVMMDStringInContext(module.Context, method.Name),
+                IntegerType.GetInt32(module.Context).Constant(1, true)
             };
-            var metadata = PInvoke.LLVMMDNodeInContext(context, metadataArgs);
+            var metadata = PInvoke.LLVMMDNodeInContext(module.Context, metadataArgs);
             PInvoke.LLVMAddNamedMetadataOperand(module, "nvvm.annotations", metadata);
         }
 
-        private static Function EmitFunction(Context context, Module module, MethodInfo method)
+        private static Function EmitFunction(Module module, MethodBase method)
         {
-            var funcType = new FunctionType(ConvertType(context, method.ReturnType), AnalyzeArguments(context, method.GetParameters()));
+            var methodInfo = method as MethodInfo;
+            var methodConstructor = method as ConstructorInfo;
+            var declaringType = method.DeclaringType;
+            if (methodInfo == null && methodConstructor == null)
+                throw new Exception("Unknown MethodBase type " + method.GetType().FullName);
+            if (declaringType == null)
+                throw new Exception("Could not find the declaring type of " + method.Name);
+
+            var parameters = method.GetParameters().Select(p => p.ParameterType);
+            if (methodConstructor != null)
+                parameters = new[] { declaringType.MakeByRefType() }.Concat(parameters);
+            var llvmParameters =
+                parameters.Select(t => ConvertType(module, t)).ToArray();
+            var funcType = new FunctionType(ConvertType(module, methodInfo == null ? typeof(void) : methodInfo.ReturnType), llvmParameters);
 
             var intrinsic = method.GetCustomAttribute<Gpu.BuiltinAttribute>();
             if (intrinsic != null)
@@ -121,17 +134,17 @@ namespace CudaSharp
                 return module.CreateFunction(name, funcType);
             }
 
-            var function = module.CreateFunction(method.Name, funcType);
+            var function = module.CreateFunction(methodConstructor == null ? method.Name : declaringType.DeclaringType.Name + "Ctor", funcType);
 
-            var block = new Block("entry", context, function);
-            var writer = new InstructionBuilder(context, block);
+            var block = new Block("entry", module.Context, function);
+            var writer = new InstructionBuilder(module.Context, block);
 
             var opcodes = method.Decompile().ToList();
-            FindBranchTargets(opcodes, context, function);
+            FindBranchTargets(opcodes, module.Context, function);
 
             var body = method.GetMethodBody();
-            var efo = new EmitFuncObj(context, module, function, writer, null, new Stack<Value>(),
-                body == null ? null : new Value[body.LocalVariables.Count], new Value[method.GetParameters().Length]);
+            var efo = new EmitFuncObj(module, function, body, writer, null, new Stack<Value>(),
+                body == null ? null : new Value[body.LocalVariables.Count], new Value[llvmParameters.Length]);
 
             foreach (var opcode in opcodes)
             {
@@ -145,31 +158,35 @@ namespace CudaSharp
             return function;
         }
 
-        private static Type[] AnalyzeArguments(Context context, IEnumerable<ParameterInfo> parameters)
-        {
-            return parameters.Select(p => ConvertType(context, p.ParameterType)).ToArray();
-        }
-
-        private static Type ConvertType(Context context, System.Type type)
+        private static Type ConvertType(Module module, System.Type type)
         {
             if (type == typeof(void))
-                return Type.GetVoid(context);
+                return Type.GetVoid(module.Context);
             if (type == typeof(bool))
-                return IntegerType.Get(context, 1);
+                return IntegerType.Get(module.Context, 1);
             if (type == typeof(byte))
-                return IntegerType.Get(context, 8);
+                return IntegerType.Get(module.Context, 8);
             if (type == typeof(short))
-                return IntegerType.Get(context, 16);
+                return IntegerType.Get(module.Context, 16);
             if (type == typeof(int))
-                return IntegerType.GetInt32(context);
+                return IntegerType.GetInt32(module.Context);
             if (type == typeof(long))
-                return IntegerType.Get(context, 64);
+                return IntegerType.Get(module.Context, 64);
             if (type == typeof(float))
-                return FloatType.Get(context, 32);
+                return FloatType.Get(module.Context, 32);
             if (type == typeof(double))
-                return FloatType.Get(context, 64);
+                return FloatType.Get(module.Context, 64);
             if (type.IsArray)
-                return PointerType.Get(ConvertType(context, type.GetElementType()), 1);
+                return PointerType.Get(ConvertType(module, type.GetElementType()), 1);
+            if (type.IsByRef)
+                return PointerType.Get(ConvertType(module, type.GetElementType()));
+            if (type.IsValueType)
+            {
+                var preExisting = module.GetTypeByName(type.Name);
+                if (preExisting != null)
+                    return preExisting;
+                return new StructType(module.Context, type.Name, AllFields(type).Select(t => ConvertType(module, t.FieldType)));
+            }
 
             throw new Exception("Type cannot be translated to CUDA: " + type.FullName);
         }
@@ -178,18 +195,19 @@ namespace CudaSharp
         {
             public InstructionBuilder Builder { get; set; }
             public object Argument { get; set; }
-            public Context Context { get; private set; }
-            public Module Module { get; set; }
+            public Context Context { get { return Module.Context; } }
+            public Module Module { get; private set; }
             public Function Function { get; private set; }
+            public MethodBody CilMethod { get; private set; }
             public Stack<Value> Stack { get; private set; }
             public Value[] Locals { get; private set; }
             public Value[] Parameters { get; private set; }
 
-            public EmitFuncObj(Context context, Module module, Function function, InstructionBuilder instructionBuilder, object argument, Stack<Value> stack, Value[] locals, Value[] parameters)
+            public EmitFuncObj(Module module, Function function, MethodBody cilMethod, InstructionBuilder instructionBuilder, object argument, Stack<Value> stack, Value[] locals, Value[] parameters)
             {
-                Context = context;
                 Module = module;
                 Function = function;
+                CilMethod = cilMethod;
                 Builder = instructionBuilder;
                 Argument = argument;
                 Stack = stack;
@@ -325,6 +343,8 @@ namespace CudaSharp
             {OpCodes.Cgt_Un, CgtUn},
             {OpCodes.Clt, Clt},
             {OpCodes.Clt_Un, CltUn},
+            {OpCodes.Ldloca, _ => LdVarA(_, _.Locals, Convert.ToInt32(_.Argument), false)},
+            {OpCodes.Ldloca_S, _ => LdVarA(_, _.Locals, Convert.ToInt32(_.Argument), false)},
             {OpCodes.Ldloc, _ => LdVar(_, _.Locals, Convert.ToInt32(_.Argument), false)},
             {OpCodes.Ldloc_S, _ => LdVar(_, _.Locals, Convert.ToInt32(_.Argument), false)},
             {OpCodes.Ldloc_0, _ => LdVar(_, _.Locals, 0, false)},
@@ -337,6 +357,8 @@ namespace CudaSharp
             {OpCodes.Stloc_1, _ => StVar(_, _.Locals, 1)},
             {OpCodes.Stloc_2, _ => StVar(_, _.Locals, 2)},
             {OpCodes.Stloc_3, _ => StVar(_, _.Locals, 3)},
+            {OpCodes.Ldarga, _ => LdVarA(_, _.Parameters, Convert.ToInt32(_.Argument), true)},
+            {OpCodes.Ldarga_S, _ => LdVarA(_, _.Parameters, Convert.ToInt32(_.Argument), true)},
             {OpCodes.Ldarg, _ => LdVar(_, _.Parameters, Convert.ToInt32(_.Argument), true)},
             {OpCodes.Ldarg_S, _ => LdVar(_, _.Parameters, Convert.ToInt32(_.Argument), true)},
             {OpCodes.Ldarg_0, _ => LdVar(_, _.Parameters, 0, true)},
@@ -371,15 +393,38 @@ namespace CudaSharp
             {OpCodes.Bgt_S, _ => {Cgt(_);BrCond(_, true);}},
             {OpCodes.Bgt_Un, _ => {CgtUn(_);BrCond(_, true);}},
             {OpCodes.Bgt_Un_S, _ => {CgtUn(_);BrCond(_, true);}},
-            {OpCodes.Tailcall, Call},
+            {OpCodes.Tailcall, _ => {}},
             {OpCodes.Call, Call},
+            {OpCodes.Ldfld, _ => _.Stack.Push(_.Builder.Load(ElementPointer(_, _.Stack.Pop(), FieldIndex((FieldInfo)_.Argument))))},
+            {OpCodes.Stfld, _ => {var value = _.Stack.Pop(); var ptr = _.Stack.Pop(); _.Builder.Store(value, ElementPointer(_, ptr, FieldIndex((FieldInfo)_.Argument)));}},
+            {OpCodes.Newobj, _ => { _.Stack.Push(_.Builder.StackAlloc(ConvertType(_.Module, ((ConstructorInfo)_.Argument).DeclaringType))); Call(_); }},
+            {OpCodes.Initobj, _ => _.Builder.Store(ConvertType(_.Module, (System.Type)_.Argument).Zero, _.Stack.Pop())},
         };
+
+        private static Value ElementPointer(EmitFuncObj _, Value pointer, int index)
+        {
+            var indexConstant = IntegerType.GetInt32(_.Context).Constant((ulong)index, false);
+            return _.Builder.Element(pointer, pointer.Type is PointerType ? new Value[] { IntegerType.GetInt32(_.Context).Constant(0, false), indexConstant } : new Value[] { indexConstant });
+        }
+
+        private static IEnumerable<FieldInfo> AllFields(System.Type type)
+        {
+            return type.GetRuntimeFields().Where(f => f.IsStatic == false);
+        }
+
+        private static int FieldIndex(FieldInfo field)
+        {
+            return AllFields(field.DeclaringType).IndexOf(f => f == field);
+        }
 
         private static void Call(EmitFuncObj _)
         {
-            var method = (MethodInfo)_.Argument;
-            var args = method.GetParameters().Select(x => _.Stack.Pop()).Reverse().ToArray();
-            var result = _.Builder.Call(EmitFunction(_.Context, _.Module, method), args);
+            var method = (MethodBase)_.Argument;
+            var count = method.GetParameters().Length;
+            if (method is ConstructorInfo)
+                count++;
+            var args = Enumerable.Range(0, count).Select(x => _.Stack.Pop()).Reverse().ToArray();
+            var result = _.Builder.Call(EmitFunction(_.Module, method), args);
             if (result.Type.StructuralEquals(Type.GetVoid(_.Context)) == false)
                 _.Stack.Push(result);
         }
@@ -483,6 +528,26 @@ namespace CudaSharp
             {
                 var load = _.Builder.Load(values[index]);
                 _.Stack.Push(load);
+            }
+        }
+
+        private static void LdVarA(EmitFuncObj _, Value[] values, int index, bool isParameter)
+        {
+            if (values[index] == null)
+            {
+                if (isParameter)
+                {
+                    var arg = _.Function[index];
+                    values[index] = _.Builder.StackAlloc(_.Function[index].Type);
+                    _.Builder.Store(arg, values[index]);
+                }
+                else
+                    values[index] = _.Builder.StackAlloc(ConvertType(_.Module, _.CilMethod.LocalVariables[index].LocalType));
+                _.Stack.Push(values[index]);
+            }
+            else
+            {
+                _.Stack.Push(values[index]);
             }
         }
 

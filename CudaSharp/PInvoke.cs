@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using LLVM;
 using CC = System.Runtime.InteropServices.CallingConvention;
+using Module = LLVM.Module;
 
 namespace CudaSharp
 {
@@ -9,7 +11,7 @@ namespace CudaSharp
     {
         private static bool _initialized;
 
-        public static byte[] EmitInMemory(Module module)
+        public static byte[] EmitInMemory(Module module, string targetCpu = "sm_20")
         {
             if (!_initialized)
             {
@@ -24,7 +26,7 @@ namespace CudaSharp
             IntPtr target;
             if (PInvoke.LLVMGetTargetFromTriple(triple, out target, out errorMessage))
                 throw new Exception(Marshal.PtrToStringAnsi(errorMessage));
-            var targetMachine = PInvoke.LLVMCreateTargetMachine(target, triple, "sm_20", "",
+            var targetMachine = PInvoke.LLVMCreateTargetMachine(target, triple, targetCpu, "",
                 PInvoke.LlvmCodeGenOptLevel.LlvmCodeGenLevelDefault, PInvoke.LlvmRelocMode.LlvmRelocDefault,
                 PInvoke.LlvmCodeModel.LlvmCodeModelDefault);
 
@@ -50,9 +52,6 @@ namespace CudaSharp
     {
         const string LlvmDll = "LLVM-3.3";
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern IntPtr LoadLibrary(string file);
-
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
         public static extern void LLVMSetTarget(IntPtr module, string triple);
 
@@ -69,7 +68,7 @@ namespace CudaSharp
         }
 
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
-        public static extern IntPtr LLVMMDNodeInContext(IntPtr context, IntPtr[] values, uint count);
+        private static extern IntPtr LLVMMDNodeInContext(IntPtr context, IntPtr[] values, uint count);
 
         // ReSharper disable once InconsistentNaming
         public static IntPtr LLVMMDStringInContext(IntPtr context, string str)
@@ -78,7 +77,7 @@ namespace CudaSharp
         }
 
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
-        public static extern IntPtr LLVMMDStringInContext(IntPtr context, string str, uint strLen);
+        private static extern IntPtr LLVMMDStringInContext(IntPtr context, string str, uint strLen);
 
         public enum LlvmCodeGenOptLevel
         {
@@ -136,8 +135,8 @@ namespace CudaSharp
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
         public static extern bool LLVMTargetMachineEmitToMemoryBuffer(IntPtr targetMachine, IntPtr module, LlvmCodeGenFileType codegen, out IntPtr errorMessage, out IntPtr memoryBuffer);
 
-        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
-        public static extern bool LLVMTargetMachineEmitToFile(IntPtr targetMachine, IntPtr module, string filename, LlvmCodeGenFileType codegen, out IntPtr errorMessage);
+        //[DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        //public static extern bool LLVMTargetMachineEmitToFile(IntPtr targetMachine, IntPtr module, string filename, LlvmCodeGenFileType codegen, out IntPtr errorMessage);
 
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
         public static extern IntPtr LLVMGetBufferStart(IntPtr memoryBuffer);
@@ -147,5 +146,18 @@ namespace CudaSharp
 
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
         public static extern void LLVMDisposeMemoryBuffer(IntPtr memoryBuffer);
+
+        // internal StructType(IntPtr typeref) : ... { }
+        private static readonly ConstructorInfo StructTypeConstructor = typeof(StructType).GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(IntPtr) }, null);
+        public static StructType GetTypeByName(this Module module, string name)
+        {
+            var intPtr = LLVMGetTypeByName(module, name);
+            if (intPtr == IntPtr.Zero)
+                return null;
+            return (StructType)StructTypeConstructor.Invoke(new object[] { intPtr });
+        }
+
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        private static extern IntPtr LLVMGetTypeByName(IntPtr module, string name);
     }
 }

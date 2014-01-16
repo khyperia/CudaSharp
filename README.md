@@ -3,7 +3,7 @@ CudaSharp
 
 A library to make C# run on CUDA-enabled GPUs
 
-This library is currently far from complete and is not intended for general use.
+This library is not complete and is not intended for general use. Testers are, however, very welcome.
 
 C# is executed on the GPU like so:
 
