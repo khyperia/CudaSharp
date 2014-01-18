@@ -76,6 +76,11 @@ namespace CudaSharpTest
             }
 
             public int X;
+
+            public int GetX()
+            {
+                return X;
+            }
         }
 
         private static SingleValueStruct StructByValTest(SingleValueStruct obj)
@@ -88,6 +93,29 @@ namespace CudaSharpTest
         public void StructByValue()
         {
             Assert.AreEqual(4, RunKernel(p => p[0] = StructByValTest(new SingleValueStruct(p[0])).X, 2));
+        }
+
+        private static SingleValueStruct StructReturnTest(int n)
+        {
+            return new SingleValueStruct(n + 2);
+        }
+
+        [Test]
+        public void StructReturn()
+        {
+            Assert.AreEqual(4, RunKernel(p => p[0] = StructReturnTest(p[0]).X, 2));
+        }
+
+        [Test]
+        public void StructInstanceMethod()
+        {
+            Assert.AreEqual(4, RunKernel(p => p[0] = StructReturnTest(p[0]).GetX(), 2));
+        }
+
+        [Test]
+        public void StructInstanceMethodInline()
+        {
+            Assert.AreEqual(4, RunKernel(p => p[0] = new SingleValueStruct(p[0] + 2).GetX(), 2));
         }
 
         private static void StructByRefTest(ref SingleValueStruct obj)
