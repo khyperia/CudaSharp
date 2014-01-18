@@ -85,8 +85,6 @@ namespace CudaSharp
             var module = Translator.Translate(Context.Global, methods);
             kernelNames = methods.Select(m => m.Name.StripNameToValidPtx()).ToArray();
             var ptx = PInvokeHelper.EmitInMemory(module, targetCpu);
-            //Console.WriteLine(Marshal.PtrToStringAnsi(PInvoke.LLVMPrintModuleToString(module)));
-            //Console.Write(Encoding.UTF8.GetString(ptx));
             return ptx;
         }
 

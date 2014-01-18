@@ -69,7 +69,7 @@ namespace CudaSharp
                         parameter = stream.ReadInt16();
                         break;
                     case OperandType.ShortInlineBrTarget:
-                        parameter = stream.ReadByte();
+                        parameter = stream.ReadSByte();
                         break;
                     case OperandType.ShortInlineI:
                         parameter = stream.ReadSByte();

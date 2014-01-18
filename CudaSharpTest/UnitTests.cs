@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Linq;
+using CudaSharp;
 using ManagedCuda;
 using NUnit.Framework;
 
@@ -7,7 +9,7 @@ namespace CudaSharpTest
     class UnitTests
     {
         private CudaContext _context;
-        
+
         [SetUp]
         public void Initialize()
         {
@@ -18,8 +20,10 @@ namespace CudaSharpTest
         {
             var methodInfo = method.Method;
             string[] kernels;
-            var ptx = CudaSharp.CudaSharp.Translate(out kernels, methodInfo);
-            Console.WriteLine(kernels[0]);
+            string llvmIr, ptxIr;
+            var ptx = CudaSharp.CudaSharp.Translate(out kernels, out llvmIr, out ptxIr, "sm_20", methodInfo);
+            Console.WriteLine(llvmIr);
+            Console.WriteLine(ptxIr);
             var kernel = _context.LoadKernelPTX(ptx, kernels[0]);
             var maxThreads = kernel.MaxThreadsPerBlock;
             if (parameters.Length <= maxThreads)
@@ -62,6 +66,104 @@ namespace CudaSharpTest
         public void Call()
         {
             Assert.AreEqual(4, RunKernel(p => p[0] = CallTest(p[0]), 2));
+        }
+
+        struct SingleValueStruct
+        {
+            public SingleValueStruct(int x)
+            {
+                X = x;
+            }
+
+            public int X;
+        }
+
+        private static SingleValueStruct StructByValTest(SingleValueStruct obj)
+        {
+            obj.X = obj.X + 2;
+            return obj;
+        }
+
+        [Test, Ignore]
+        public void StructByValue()
+        {
+            Assert.AreEqual(4, RunKernel(p => p[0] = StructByValTest(new SingleValueStruct(p[0])).X, 2));
+        }
+
+        private static void StructByRefTest(ref SingleValueStruct obj)
+        {
+            obj.X = obj.X + 2;
+        }
+
+        [Test]
+        public void StructByRef()
+        {
+            Assert.AreEqual(4, RunKernel(p =>
+            {
+                var obj = new SingleValueStruct(p[0]);
+                StructByRefTest(ref obj);
+                p[0] = obj.X;
+            }, 2));
+        }
+
+        [Test]
+        public void IfStatement()
+        {
+            Assert.AreEqual(4, RunKernel(p =>
+            {
+                if (p[0] == 2)
+                    p[0] = 4;
+            }, 2));
+        }
+
+        [Test]
+        public void IfNotStatement()
+        {
+            Assert.AreEqual(4, RunKernel(p =>
+            {
+                if (p[0] != 1)
+                    p[0] = 4;
+            }, 2));
+        }
+
+        [Test]
+        public void IfCltStatement()
+        {
+            Assert.AreEqual(4, RunKernel(p =>
+            {
+                if (p[0] < 4)
+                    p[0] = 4;
+            }, 2));
+        }
+
+        [Test]
+        public void WhileStatement()
+        {
+            Assert.AreEqual(4, RunKernel(p =>
+            {
+                while (p[0] != 4)
+                    p[0]++;
+            }, 2));
+        }
+
+        [Test]
+        public void ForStatement()
+        {
+            Assert.AreEqual(4, RunKernel(p =>
+            {
+                for (var i = 0; i < 2; i++)
+                    p[0]++;
+            }, 2));
+        }
+
+        [Test]
+        public void ThreadIdxIntrinsics()
+        {
+            Assert.AreEqual(Enumerable.Range(0, 256).ToArray(), RunKernel(p =>
+            {
+                var tid = Gpu.BlockX() * Gpu.ThreadDimX() + Gpu.ThreadX();
+                p[tid] = tid;
+            }, new int[256]));
         }
     }
 }
