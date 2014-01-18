@@ -11,7 +11,7 @@ namespace CudaSharp
     {
         private static bool _initialized;
 
-        public static byte[] EmitInMemory(Module module, string targetCpu = "sm_20")
+        public static byte[] EmitInMemory(Module module, string targetCpu)
         {
             if (!_initialized)
             {
@@ -25,7 +25,7 @@ namespace CudaSharp
             IntPtr errorMessage;
             IntPtr target;
             if (PInvoke.LLVMGetTargetFromTriple(triple, out target, out errorMessage))
-                throw new Exception(Marshal.PtrToStringAnsi(errorMessage));
+                throw new CudaSharpException(Marshal.PtrToStringAnsi(errorMessage));
             var targetMachine = PInvoke.LLVMCreateTargetMachine(target, triple, targetCpu, "",
                 PInvoke.LlvmCodeGenOptLevel.LlvmCodeGenLevelDefault, PInvoke.LlvmRelocMode.LlvmRelocDefault,
                 PInvoke.LlvmCodeModel.LlvmCodeModelDefault);
@@ -37,7 +37,7 @@ namespace CudaSharp
             {
                 var errorMessageStr = Marshal.PtrToStringAnsi(errorMessage);
                 if (string.IsNullOrWhiteSpace(errorMessageStr) == false)
-                    throw new Exception(errorMessageStr);
+                    throw new CudaSharpException(errorMessageStr);
             }
             var bufferStart = PInvoke.LLVMGetBufferStart(memoryBuffer);
             var bufferLength = PInvoke.LLVMGetBufferSize(memoryBuffer);
@@ -52,17 +52,32 @@ namespace CudaSharp
     {
         const string LlvmDll = "LLVM-3.3";
 
-        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
-        public static extern void LLVMSetTarget(IntPtr module, string triple);
+        public static void SetTarget(this Module module, string triple)
+        {
+            LLVMSetTarget(module, triple);
+        }
 
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
-        public static extern void LLVMSetDataLayout(IntPtr module, string triple);
+        private static extern void LLVMSetTarget(IntPtr module, string triple);
+
+        public static void SetDataLayout(this Module module, string triple)
+        {
+            LLVMSetDataLayout(module, triple);
+        }
 
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
-        public static extern void LLVMAddNamedMetadataOperand(IntPtr module, string name, IntPtr value);
+        private static extern void LLVMSetDataLayout(IntPtr module, string triple);
+
+        public static void AddNamedMetadataOperand(this Module module, string name, IntPtr value)
+        {
+            LLVMAddNamedMetadataOperand(module, name, value);
+        }
+
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        private static extern void LLVMAddNamedMetadataOperand(IntPtr module, string name, IntPtr value);
 
         // ReSharper disable once InconsistentNaming
-        public static IntPtr LLVMMDNodeInContext(IntPtr context, IntPtr[] values)
+        public static IntPtr MetadataNodeInContext(this Context context, IntPtr[] values)
         {
             return LLVMMDNodeInContext(context, values, (uint)values.Length);
         }
@@ -108,7 +123,7 @@ namespace CudaSharp
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
         public static extern IntPtr LLVMCreateTargetMachine(IntPtr target, string triple, string cpu, string features, LlvmCodeGenOptLevel level, LlvmRelocMode reloc, LlvmCodeModel codeModel);
 
-        public enum LlvmCodeGenFileType : uint
+        public enum LlvmCodeGenFileType
         {
             LlvmAssemblyFile,
             LlvmObjectFile
@@ -159,5 +174,8 @@ namespace CudaSharp
 
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
         private static extern IntPtr LLVMGetTypeByName(IntPtr module, string name);
+
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        public static extern IntPtr LLVMPrintModuleToString(IntPtr module);
     }
 }

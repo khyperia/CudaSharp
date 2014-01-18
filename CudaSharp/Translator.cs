@@ -3,75 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.InteropServices;
 using LLVM;
 using Module = LLVM.Module;
 using Type = LLVM.Type;
 
 namespace CudaSharp
 {
-    public static class Gpu
-    {
-        [AttributeUsage(AttributeTargets.Method)]
-        public class BuiltinAttribute : Attribute
-        {
-            private readonly string _intrinsic;
-
-            public BuiltinAttribute(string intrinsic)
-            {
-                _intrinsic = intrinsic;
-            }
-
-            public string Intrinsic
-            {
-                get { return _intrinsic; }
-            }
-        }
-
-        private static Exception Exception { get { return new Exception("Cannot use methods from the Gpu class on the CPU"); } }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.tid.x")]
-        public static int ThreadX() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.tid.y")]
-        public static int ThreadY() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.tid.z")]
-        public static int ThreadZ() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.ctaid.x")]
-        public static int BlockX() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.ctaid.y")]
-        public static int BlockY() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.ctaid.z")]
-        public static int BlockZ() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.ntid.x")]
-        public static int ThreadDimX() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.ntid.y")]
-        public static int ThreadDimY() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.ntid.z")]
-        public static int ThreadDimZ() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.nctaid.x")]
-        public static int BlockDimX() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.nctaid.y")]
-        public static int BlockDimY() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.nctaid.z")]
-        public static int BlockDimZ() { throw Exception; }
-
-        [Builtin("llvm.nvvm.read.ptx.sreg.warpsize")]
-        public static int WarpSize() { throw Exception; }
-
-        [Builtin("llvm.nvvm.barrier0")]
-        public static void Barrier() { throw Exception; }
-    }
-
     static class Translator
     {
         public static Module Translate(Context context, params MethodInfo[] methods)
@@ -80,31 +18,34 @@ namespace CudaSharp
 
             if (Environment.Is64BitOperatingSystem)
             {
-                PInvoke.LLVMSetTarget(module, "nvptx64-nvidia-cuda");
-                PInvoke.LLVMSetDataLayout(module, "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
+                module.SetTarget("nvptx64-nvidia-cuda");
+                module.SetDataLayout("e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
             }
             else
             {
-                PInvoke.LLVMSetTarget(module, "nvptx-nvidia-cuda");
-                PInvoke.LLVMSetDataLayout(module, "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
+                module.SetTarget("nvptx-nvidia-cuda");
+                module.SetDataLayout("e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
             }
 
             foreach (var method in methods)
                 Translate(module, method);
+
             return module;
         }
 
         private static void Translate(Module module, MethodBase method)
         {
             var function = EmitFunction(module, method);
+            if (method.IsStatic == false)
+                throw new CudaSharpException("Cannot translate instance methods to GPU code");
 
             var metadataArgs = new[]
             {
-                function, PInvoke.LLVMMDStringInContext(module.Context, method.Name),
+                function, PInvoke.LLVMMDStringInContext(module.Context, "kernel"),
                 IntegerType.GetInt32(module.Context).Constant(1, true)
             };
-            var metadata = PInvoke.LLVMMDNodeInContext(module.Context, metadataArgs);
-            PInvoke.LLVMAddNamedMetadataOperand(module, "nvvm.annotations", metadata);
+            var metadata = module.Context.MetadataNodeInContext(metadataArgs);
+            module.AddNamedMetadataOperand("nvvm.annotations", metadata);
         }
 
         private static Function EmitFunction(Module module, MethodBase method)
@@ -113,13 +54,19 @@ namespace CudaSharp
             var methodConstructor = method as ConstructorInfo;
             var declaringType = method.DeclaringType;
             if (methodInfo == null && methodConstructor == null)
-                throw new Exception("Unknown MethodBase type " + method.GetType().FullName);
+                throw new CudaSharpException("Unknown MethodBase type " + method.GetType().FullName);
             if (declaringType == null)
-                throw new Exception("Could not find the declaring type of " + method.Name);
+                throw new CudaSharpException("Could not find the declaring type of " + method.Name.StripNameToValidPtx());
 
             var parameters = method.GetParameters().Select(p => p.ParameterType);
             if (methodConstructor != null)
                 parameters = new[] { declaringType.MakeByRefType() }.Concat(parameters);
+            if (methodInfo != null && methodInfo.IsStatic == false)
+            {
+                if (declaringType.IsValueType == false)
+                    throw new CudaSharpException("Cannot compile object instance methods (did you forget to mark the method as static?)");
+                parameters = new[] { declaringType.MakeByRefType() }.Concat(parameters);
+            }
             var llvmParameters =
                 parameters.Select(t => ConvertType(module, t)).ToArray();
             var funcType = new FunctionType(ConvertType(module, methodInfo == null ? typeof(void) : methodInfo.ReturnType), llvmParameters);
@@ -134,7 +81,7 @@ namespace CudaSharp
                 return module.CreateFunction(name, funcType);
             }
 
-            var function = module.CreateFunction(methodConstructor == null ? method.Name : declaringType.DeclaringType.Name + "Ctor", funcType);
+            var function = module.CreateFunction(methodConstructor == null ? method.Name.StripNameToValidPtx() : declaringType.Name.StripNameToValidPtx() + "_ctor", funcType);
 
             var block = new Block("entry", module.Context, function);
             var writer = new InstructionBuilder(module.Context, block);
@@ -149,13 +96,49 @@ namespace CudaSharp
             foreach (var opcode in opcodes)
             {
                 if (EmitFunctions.ContainsKey(opcode.Opcode) == false)
-                    throw new Exception("Unsupported CIL instruction " + opcode.Opcode);
+                    throw new CudaSharpException("Unsupported CIL instruction " + opcode.Opcode);
                 var func = EmitFunctions[opcode.Opcode];
                 efo.Argument = opcode.Parameter;
                 func(efo);
             }
 
             return function;
+        }
+
+        private static void FindBranchTargets(IList<OpCodeInstruction> opCodes, Context context, Function function)
+        {
+            for (var i = 0; i < opCodes.Count; i++)
+            {
+                var op = opCodes[i];
+                var opcode = op.Opcode;
+                switch (opcode.FlowControl)
+                {
+                    case FlowControl.Branch:
+                    case FlowControl.Cond_Branch:
+                        break;
+                    default:
+                        continue;
+                }
+
+                var target = Convert.ToInt32(op.Parameter);
+                target += (int)opCodes[i + 1].InstructionStart;
+
+                var insert = 0;
+                while (opCodes[insert].InstructionStart != target)
+                    insert++;
+
+                var contBlock = opcode.FlowControl == FlowControl.Cond_Branch ? new Block("", context, function) : null;
+                Block block;
+                if (opCodes[insert].Opcode == OpCodes.Nop && opCodes[insert].Parameter != null)
+                    block = (Block)opCodes[insert].Parameter;
+                else
+                {
+                    opCodes.Insert(insert, new OpCodeInstruction(target, OpCodes.Nop, block = new Block("", context, function)));
+                    if (insert < i)
+                        i++;
+                }
+                opCodes[i] = new OpCodeInstruction(op.InstructionStart, op.Opcode, contBlock == null ? (object)block : Tuple.Create(contBlock, block));
+            }
         }
 
         private static Type ConvertType(Module module, System.Type type)
@@ -182,13 +165,14 @@ namespace CudaSharp
                 return PointerType.Get(ConvertType(module, type.GetElementType()));
             if (type.IsValueType)
             {
-                var preExisting = module.GetTypeByName(type.Name);
+                var name = type.Name.StripNameToValidPtx();
+                var preExisting = module.GetTypeByName(name);
                 if (preExisting != null)
                     return preExisting;
-                return new StructType(module.Context, type.Name, AllFields(type).Select(t => ConvertType(module, t.FieldType)));
+                return new StructType(module.Context, name, AllFields(type).Select(t => ConvertType(module, t.FieldType)));
             }
 
-            throw new Exception("Type cannot be translated to CUDA: " + type.FullName);
+            throw new CudaSharpException("Type cannot be translated to CUDA: " + type.FullName);
         }
 
         class EmitFuncObj
@@ -216,42 +200,6 @@ namespace CudaSharp
             }
         }
 
-        private static void FindBranchTargets(IList<OpCodeInstruction> opCodes, Context context, Function function)
-        {
-            for (var i = 0; i < opCodes.Count; i++)
-            {
-                var op = opCodes[i];
-                var opcode = op.Opcode;
-                switch (opcode.FlowControl)
-                {
-                    case FlowControl.Branch:
-                    case FlowControl.Cond_Branch:
-                        break;
-                    default:
-                        continue;
-                }
-
-                var target = Convert.ToInt32(op.Parameter);
-                target += (int)opCodes[i + 1].InstructionStart;
-
-                var insert = 0;
-                while (opCodes[insert].InstructionStart != target)
-                    insert++;
-
-                var contBlock = new Block("", context, function);
-                Block block;
-                if (opCodes[insert].Opcode == OpCodes.Nop && opCodes[insert].Parameter != null)
-                    block = (Block)opCodes[insert].Parameter;
-                else
-                {
-                    opCodes.Insert(insert, new OpCodeInstruction(target, OpCodes.Nop, block = new Block("", context, function)));
-                    if (insert < i)
-                        i++;
-                }
-                opCodes[i] = new OpCodeInstruction(op.InstructionStart, op.Opcode, Tuple.Create(contBlock, block));
-            }
-        }
-
         private delegate void EmitFunc(EmitFuncObj arg);
 
         private static readonly Dictionary<OpCode, EmitFunc> EmitFunctions = new Dictionary<OpCode, EmitFunc>
@@ -260,8 +208,8 @@ namespace CudaSharp
             {OpCodes.Pop, _ => _.Stack.Pop()},
             {OpCodes.Dup, _ => _.Stack.Push(_.Stack.Peek())},
             {OpCodes.Ret, _ => { if (_.Stack.Count == 0) _.Builder.Return(); else _.Builder.Return(_.Stack.Pop()); _.Builder = null; }},
-            {OpCodes.Ldc_I4, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(Convert.ToUInt64(_.Argument), true))},
-            {OpCodes.Ldc_I4_S, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(Convert.ToUInt64(_.Argument), true))},
+            {OpCodes.Ldc_I4, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant((ulong)Convert.ToInt64(_.Argument), true))},
+            {OpCodes.Ldc_I4_S, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant((ulong)Convert.ToInt64(_.Argument), true))},
             {OpCodes.Ldc_I4_0, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(0, true))},
             {OpCodes.Ldc_I4_1, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(1, true))},
             {OpCodes.Ldc_I4_2, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(2, true))},
@@ -272,7 +220,7 @@ namespace CudaSharp
             {OpCodes.Ldc_I4_7, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(7, true))},
             {OpCodes.Ldc_I4_8, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(8, true))},
             {OpCodes.Ldc_I4_M1, _ => _.Stack.Push(IntegerType.GetInt32(_.Context).Constant(ulong.MaxValue, true))},
-            {OpCodes.Ldc_I8, _ => _.Stack.Push(IntegerType.Get(_.Context, 64).Constant(ulong.MaxValue, true))},
+            {OpCodes.Ldc_I8, _ => _.Stack.Push(IntegerType.Get(_.Context, 64).Constant((ulong)Convert.ToInt64(_.Argument), true))},
             {OpCodes.Stelem, StElem},
             {OpCodes.Stelem_I, StElem},
             {OpCodes.Stelem_I1, StElem},
@@ -294,6 +242,9 @@ namespace CudaSharp
             {OpCodes.Ldelem_U1, LdElem},
             {OpCodes.Ldelem_U2, LdElem},
             {OpCodes.Ldelem_U4, LdElem},
+            {OpCodes.Ldelema, LdElemA},
+            {OpCodes.Ldobj, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
+            {OpCodes.Stobj, _ => _.Builder.Store(_.Stack.Pop(), _.Stack.Pop())},
             {OpCodes.Ldind_I, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
             {OpCodes.Ldind_I1, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
             {OpCodes.Ldind_I2, _ => _.Stack.Push(_.Builder.Load(_.Stack.Pop()))},
@@ -403,8 +354,9 @@ namespace CudaSharp
 
         private static Value ElementPointer(EmitFuncObj _, Value pointer, int index)
         {
+            var zeroConstant = IntegerType.GetInt32(_.Context).Constant(0, false);
             var indexConstant = IntegerType.GetInt32(_.Context).Constant((ulong)index, false);
-            return _.Builder.Element(pointer, pointer.Type is PointerType ? new Value[] { IntegerType.GetInt32(_.Context).Constant(0, false), indexConstant } : new Value[] { indexConstant });
+            return _.Builder.Element(pointer, new Value[] { zeroConstant, indexConstant });
         }
 
         private static IEnumerable<FieldInfo> AllFields(System.Type type)
@@ -518,7 +470,7 @@ namespace CudaSharp
             if (values[index] == null)
             {
                 if (!isParameter)
-                    throw new Exception("Uninitialized variable at index " + index);
+                    throw new CudaSharpException("Uninitialized variable at index " + index);
                 var arg = _.Function[index];
                 values[index] = _.Builder.StackAlloc(_.Function[index].Type);
                 _.Builder.Store(arg, values[index]);
@@ -575,6 +527,14 @@ namespace CudaSharp
             var idx = _.Builder.Element(array, new[] { index });
             var load = _.Builder.Load(idx);
             _.Stack.Push(load);
+        }
+
+        private static void LdElemA(EmitFuncObj _)
+        {
+            var index = _.Stack.Pop();
+            var array = _.Stack.Pop();
+            var idx = _.Builder.Element(array, new[] { index });
+            _.Stack.Push(idx);
         }
 
         private static void ConvertNum(EmitFuncObj _, Type target, bool integerSignedness)

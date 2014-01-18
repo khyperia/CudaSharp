@@ -16,7 +16,7 @@ namespace CudaSharp
             var module = method.Module;
             var methodBody = method.GetMethodBody();
             if (methodBody == null)
-                throw new Exception("Could not get method body of " + method.Name);
+                throw new CudaSharpException("Could not get method body of " + method.Name);
             var stream = new BinaryReader(new MemoryStream(methodBody.GetILAsByteArray()));
             while (stream.BaseStream.Position < stream.BaseStream.Length)
             {
@@ -72,7 +72,7 @@ namespace CudaSharp
                         parameter = stream.ReadByte();
                         break;
                     case OperandType.ShortInlineI:
-                        parameter = stream.ReadByte();
+                        parameter = stream.ReadSByte();
                         break;
                     case OperandType.ShortInlineR:
                         parameter = stream.ReadSingle();
