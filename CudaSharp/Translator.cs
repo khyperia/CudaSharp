@@ -85,7 +85,7 @@ namespace CudaSharp
             var block = new Block("entry", module.Context, function);
             var writer = new InstructionBuilder(module.Context, block);
 
-            var opcodes = method.Decompile().ToList();
+            var opcodes = method.Disassemble().ToList();
             FindBranchTargets(opcodes, module.Context, function);
 
             var body = method.GetMethodBody();
@@ -563,12 +563,38 @@ namespace CudaSharp
 
         private static void ConvertNum(EmitFuncObj _, Type target, bool integerSignedness)
         {
-            //var value = _.Stack.Pop();
-            //var valueType = value.Type;
-            //if (valueType is IntegerType && target is FloatType)
-            //{
-            //    value = _.Builder.
-            //}
+            var value = _.Stack.Pop();
+            var valueType = value.Type;
+            if (valueType is IntegerType && target is FloatType)
+            {
+                if (integerSignedness)
+                    value = _.Builder.SignedIntToFloat(value, target);
+                else
+                    value = _.Builder.UnsignedIntToFloat(value, target);
+            }
+            else if (valueType is FloatType && target is IntegerType)
+            {
+                if (integerSignedness)
+                    value = _.Builder.FloatToSignedInt(value, target);
+                else
+                    value = _.Builder.FloatToUnsignedInt(value, target);
+            }
+            else if (valueType is IntegerType && target is IntegerType)
+            {
+                var valueInt = (IntegerType) valueType;
+                var targetInt = (IntegerType) target;
+                if (valueInt.Width > targetInt.Width)
+                    value = _.Builder.Trunc(value, target);
+                else if (integerSignedness)
+                    value = _.Builder.SignExtend(value, target);
+                else
+                    value = _.Builder.ZeroExtend(value, target);
+            }
+            else
+            {
+                throw new CudaSharpException(string.Format("Cannot convert {0} to {1}", valueType, target));
+            }
+            _.Stack.Push(value);
         }
     }
 }

@@ -177,5 +177,49 @@ namespace CudaSharp
 
         [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
         public static extern IntPtr LLVMPrintModuleToString(IntPtr module);
+
+        // internal Value(IntPtr typeref) : ... { }
+        private static readonly ConstructorInfo ValueConstructor = typeof(Value).GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(IntPtr) }, null);
+        public static Value FloatToUnsignedInt(this InstructionBuilder builder, Value value, LLVM.Type type, string name = "")
+        {
+            return (Value)ValueConstructor.Invoke(new object[] { LLVMBuildFPToUI(builder, value, type, name) });
+        }
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        private static extern IntPtr LLVMBuildFPToUI(IntPtr builder, IntPtr val, IntPtr destTy, string name);
+
+        public static Value FloatToSignedInt(this InstructionBuilder builder, Value value, LLVM.Type type, string name = "")
+        {
+            return (Value)ValueConstructor.Invoke(new object[] { LLVMBuildFPToSI(builder, value, type, name) });
+        }
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        private static extern IntPtr LLVMBuildFPToSI(IntPtr builder, IntPtr val, IntPtr destTy, string name);
+
+        public static Value UnsignedIntToFloat(this InstructionBuilder builder, Value value, LLVM.Type type, string name = "")
+        {
+            return (Value)ValueConstructor.Invoke(new object[] { LLVMBuildUIToFP(builder, value, type, name) });
+        }
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        private static extern IntPtr LLVMBuildUIToFP(IntPtr builder, IntPtr val, IntPtr destTy, string name);
+
+        public static Value SignedIntToFloat(this InstructionBuilder builder, Value value, LLVM.Type type, string name = "")
+        {
+            return (Value)ValueConstructor.Invoke(new object[] { LLVMBuildSIToFP(builder, value, type, name) });
+        }
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        private static extern IntPtr LLVMBuildSIToFP(IntPtr builder, IntPtr val, IntPtr destTy, string name);
+
+        public static Value FloatTrunc(this InstructionBuilder builder, Value value, LLVM.Type type, string name = "")
+        {
+            return (Value)ValueConstructor.Invoke(new object[] { LLVMBuildFPTrunc(builder, value, type, name) });
+        }
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        private static extern IntPtr LLVMBuildFPTrunc(IntPtr builder, IntPtr val, IntPtr destTy, string name);
+
+        public static Value FloatExtend(this InstructionBuilder builder, Value value, LLVM.Type type, string name = "")
+        {
+            return (Value)ValueConstructor.Invoke(new object[] { LLVMBuildFPExt(builder, value, type, name) });
+        }
+        [DllImport(LlvmDll, CallingConvention = CC.Cdecl)]
+        private static extern IntPtr LLVMBuildFPExt(IntPtr builder, IntPtr val, IntPtr destTy, string name);
     }
 }

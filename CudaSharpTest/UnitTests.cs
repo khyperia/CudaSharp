@@ -193,5 +193,16 @@ namespace CudaSharpTest
                 p[tid] = tid;
             }, new int[256]));
         }
+
+        private static int IntCastingTest(short x)
+        {
+            return x;
+        }
+
+        [Test, Ignore]
+        public void IntCasting()
+        {
+            Assert.AreEqual(4, RunKernel(p => p[0] = IntCastingTest((short)p[0]) + 2, 2));
+        }
     }
 }

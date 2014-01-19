@@ -11,7 +11,7 @@ namespace CudaSharp
     {
         static readonly Dictionary<short, OpCode> OpcodeLookupTable = typeof(OpCodes).GetFields().Select(f => (OpCode)f.GetValue(null)).ToDictionary(op => op.Value);
 
-        public static IEnumerable<OpCodeInstruction> Decompile(this MethodBase method)
+        public static IEnumerable<OpCodeInstruction> Disassemble(this MethodBase method)
         {
             var module = method.Module;
             var methodBody = method.GetMethodBody();
