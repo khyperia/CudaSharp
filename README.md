@@ -13,4 +13,4 @@ C# is executed on the GPU like so:
 
 * Use your GPU library of choice (for example, ManagedCuda) to read in the PTX file and execute it on the GPU
 
-For an example usage, see CudaSharpTest/Program.cs
+For an example usage, see CudaSharpTest/UnitTests.cs

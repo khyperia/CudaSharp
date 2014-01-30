@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CudaSharp", "CudaSharp\Cuda
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CudaSharpTest", "CudaSharpTest\CudaSharpTest.csproj", "{8DA72F5A-180E-41B2-9FE8-7CD63CBC17DC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CudaSharpCompiler", "CudaSharpCompiler\CudaSharpCompiler.csproj", "{14663B9E-D3C6-491C-B497-43CDF685C1F5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{8DA72F5A-180E-41B2-9FE8-7CD63CBC17DC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8DA72F5A-180E-41B2-9FE8-7CD63CBC17DC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8DA72F5A-180E-41B2-9FE8-7CD63CBC17DC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{14663B9E-D3C6-491C-B497-43CDF685C1F5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{14663B9E-D3C6-491C-B497-43CDF685C1F5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{14663B9E-D3C6-491C-B497-43CDF685C1F5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{14663B9E-D3C6-491C-B497-43CDF685C1F5}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
